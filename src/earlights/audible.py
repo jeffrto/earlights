@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from . import libation
 from .annotations import parse_voucher
 from .models import BookFiles, BookInfo
 
@@ -11,7 +12,7 @@ class AudibleError(Exception):
     pass
 
 
-def _run(args: list[str], profile: str | None) -> subprocess.CompletedProcess:
+def _run(args: list[str], profile: str | None, check: bool = True) -> subprocess.CompletedProcess:
     cmd = ["audible"]
     if profile:
         cmd += ["-P", profile]
@@ -22,7 +23,7 @@ def _run(args: list[str], profile: str | None) -> subprocess.CompletedProcess:
         raise AudibleError(
             "audible-cli not found. Install it and run `audible quickstart`."
         ) from None
-    if result.returncode != 0:
+    if check and result.returncode != 0:
         raise AudibleError(result.stderr.strip() or result.stdout.strip() or "audible failed")
     return result
 
@@ -73,6 +74,12 @@ def _find_audio(asin: str, dest: Path) -> Path | None:
     return None
 
 
+def _libation_audio(asin: str) -> Path | None:
+    if not libation.available():
+        return None
+    return libation.find_audio(asin, libation.books_dir())
+
+
 def download_book(asin: str, dest: Path, profile: str | None = None) -> BookFiles:
     dest.mkdir(parents=True, exist_ok=True)
     annotations = dest / f"{asin}-annotations.json"
@@ -80,21 +87,26 @@ def download_book(asin: str, dest: Path, profile: str | None = None) -> BookFile
     # audible-cli skips files that already exist, and annotations change between runs
     annotations.unlink(missing_ok=True)
 
-    args = ["download", "-a", asin]
-    if _find_audio(asin, dest) is None:
-        args.append("--aaxc")
-    args += ["--annotation", "--chapter", "--chapter-type", "flat"]
-    args += ["-o", str(dest), "-f", "asin_only", "-y", "--no-progress"]
-    result = _run(args, profile)
-
-    audio = _find_audio(asin, dest)
-    if audio is None:
-        detail = (result.stderr.strip() or result.stdout.strip())[-2000:]
-        raise AudibleError(f"Download of {asin} produced no audio file. {detail}".strip())
     try:
-        key, iv = parse_voucher(json.loads(audio.with_suffix(".voucher").read_text()))
-    except (ValueError, KeyError, TypeError) as exc:
-        raise AudibleError(f"Could not read voucher for {asin}: {exc!r}") from None
+        audio = _find_audio(asin, dest) or _libation_audio(asin)
+        args = ["download", "-a", asin]
+        if audio is None:
+            args.append("--aaxc")
+        args += ["--annotation", "--chapter", "--chapter-type", "flat"]
+        args += ["-o", str(dest), "-f", "asin_only", "-y", "--no-progress"]
+        # a denied audio license exits non-zero even though annotations were saved
+        result = _run(args, profile, check=audio is not None)
+        if audio is None:
+            audio = _find_audio(asin, dest) or _after_failed_download(asin, result)
+    except libation.LibationError as exc:
+        raise AudibleError(str(exc)) from None
+
+    key = iv = None
+    if audio.suffix == ".aaxc":
+        try:
+            key, iv = parse_voucher(json.loads(audio.with_suffix(".voucher").read_text()))
+        except (ValueError, KeyError, TypeError) as exc:
+            raise AudibleError(f"Could not read voucher for {asin}: {exc!r}") from None
     return BookFiles(
         audio=audio,
         key=key,
@@ -102,6 +114,20 @@ def download_book(asin: str, dest: Path, profile: str | None = None) -> BookFile
         annotations=annotations if annotations.exists() else None,
         chapters=chapters if chapters.exists() else None,
     )
+
+
+def _after_failed_download(asin: str, result: subprocess.CompletedProcess) -> Path:
+    output = "\n".join(s.strip() for s in (result.stderr, result.stdout) if s.strip())
+    if "LicenseDenied" in output:
+        if libation.available():
+            return libation.liberate(asin)
+        raise AudibleError(
+            f"Audible denied the download license for {asin} (common for subscription "
+            "titles). Install Libation, sign in, and run again."
+        )
+    if result.returncode != 0:
+        raise AudibleError(output or "audible failed")
+    raise AudibleError(f"Download of {asin} produced no audio file. {output[-2000:]}".strip())
 
 
 def find_book(query: str, library: list[BookInfo]) -> BookInfo:
