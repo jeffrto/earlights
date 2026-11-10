@@ -35,3 +35,12 @@ class BookFiles:
     audio: Path
     annotations: Path | None
     chapters: Path | None
+
+
+@dataclass(frozen=True)
+class Passage:
+    marker_id: str
+    text: str
+    source: Literal["transcript", "epub", "ai", "none"]
+    mode: str
+    transcript: str

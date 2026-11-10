@@ -12,3 +12,12 @@ def load_fixture():
         return json.loads((FIXTURES / name).read_text())
 
     return load
+
+
+@pytest.fixture
+def dirs(tmp_path, monkeypatch):
+    from earlights import paths
+
+    monkeypatch.setattr(paths, "user_cache_dir", lambda app: str(tmp_path / "cache"))
+    monkeypatch.setattr(paths, "user_data_dir", lambda app: str(tmp_path / "data"))
+    return tmp_path
