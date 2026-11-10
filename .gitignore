@@ -1,1 +1,10 @@
-CLAUDE.md
+.venv/
+__pycache__/
+*.egg-info/
+dist/
+.pytest_cache/
+.ruff_cache/
+*.aaxc
+*.voucher
+*.epub
+*-annotations.json
