@@ -1,3 +1,4 @@
+import html
 import logging
 from dataclasses import replace
 from datetime import datetime
@@ -50,7 +51,7 @@ def _parse_record(record: dict) -> Marker | None:
         kind=_KINDS.get(kind, "bookmark"),
         start_ms=start,
         end_ms=end,
-        note=note or None,
+        note=html.unescape(note) if note else None,
         created=_parse_time(record["creationTime"]),
     )
 

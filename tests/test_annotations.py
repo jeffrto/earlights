@@ -94,3 +94,19 @@ def test_chapter_at(load_fixture):
     assert chapter_at(chapters, 50000).title == "Chapter 1"
     assert chapter_at(chapters, 999999).title == "Chapter 2"
     assert chapter_at([], 1000) is None
+
+
+def test_note_html_entities_unescaped():
+    data = {
+        "payload": {
+            "records": [
+                {
+                    "type": "audible.note",
+                    "startPosition": "1000",
+                    "creationTime": "2026-01-01 10:00:00.0",
+                    "text": "inquieta&ccedil;&atilde;o &amp; busca",
+                }
+            ]
+        }
+    }
+    assert parse_annotations(data)[0].note == "inquietação & busca"
