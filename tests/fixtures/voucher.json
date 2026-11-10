@@ -1,0 +1,9 @@
+{
+  "content_license": {
+    "asin": "B000FAKE01",
+    "license_response": {
+      "key": "00112233445566778899aabbccddeeff",
+      "iv": "ffeeddccbbaa99887766554433221100"
+    }
+  }
+}

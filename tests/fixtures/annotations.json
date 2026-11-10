@@ -1,0 +1,42 @@
+{
+  "md5": "0",
+  "payload": {
+    "acr": "FAKEACR",
+    "key": "B000FAKE01",
+    "type": "AUDI",
+    "records": [
+      {
+        "type": "audible.last_heard",
+        "startPosition": "300000",
+        "creationTime": "2026-01-05 10:00:00.0"
+      },
+      {
+        "type": "audible.clip",
+        "annotationId": "clip-1",
+        "startPosition": "120000",
+        "endPosition": "125000",
+        "creationTime": "2026-01-03 09:30:00.0",
+        "lastModificationTime": "2026-01-03 09:31:00.0",
+        "metadata": {"note": "clip note", "c_version": "1"}
+      },
+      {
+        "type": "audible.bookmark",
+        "annotationId": "bm-1",
+        "startPosition": "60000",
+        "creationTime": "2026-01-02 08:15:30.123"
+      },
+      {
+        "type": "audible.note",
+        "startPosition": "60000",
+        "endPosition": "60000",
+        "creationTime": "2026-01-02 08:16:00.0",
+        "text": "my note"
+      },
+      {
+        "type": "audible.bookmark",
+        "annotationId": "bm-broken",
+        "creationTime": "2026-01-04 08:00:00.0"
+      }
+    ]
+  }
+}
