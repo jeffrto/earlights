@@ -33,7 +33,5 @@ class Marker:
 @dataclass(frozen=True)
 class BookFiles:
     audio: Path
-    key: str | None
-    iv: str | None
     annotations: Path | None
     chapters: Path | None

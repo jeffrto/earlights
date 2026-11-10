@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 
-from earlights.annotations import chapter_at, parse_annotations, parse_chapters, parse_voucher
+from earlights.annotations import chapter_at, parse_annotations, parse_chapters
 
 
 def test_parse_annotations_kinds_and_order(load_fixture):
@@ -86,12 +86,6 @@ def test_parse_chapters_and_runtime(load_fixture):
     assert [c.title for c in chapters] == ["Opening", "Chapter 1", "Chapter 2"]
     assert chapters[1].start_ms == 50000
     assert chapters[1].length_ms == 100000
-
-
-def test_parse_voucher(load_fixture):
-    key, iv = parse_voucher(load_fixture("voucher.json"))
-    assert key == "00112233445566778899aabbccddeeff"
-    assert iv == "ffeeddccbbaa99887766554433221100"
 
 
 def test_chapter_at(load_fixture):

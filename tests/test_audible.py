@@ -9,7 +9,6 @@ from earlights.audible import AudibleError, download_book, find_book, get_book_i
 from earlights.models import BookInfo
 
 ASIN = "B000FAKE01"
-FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class FakeRun:
@@ -27,66 +26,88 @@ class FakeRun:
         return subprocess.CompletedProcess(cmd, self.returncode, self.stdout, self.stderr)
 
 
-@pytest.fixture(autouse=True)
-def no_libation(monkeypatch):
-    monkeypatch.setattr(libation, "available", lambda: False)
+@pytest.fixture
+def books(tmp_path, monkeypatch):
+    folder = tmp_path / "books"
+    folder.mkdir()
+    monkeypatch.setattr(libation, "available", lambda: True)
+    monkeypatch.setattr(libation, "books_dir", lambda: folder)
+    return folder
 
 
-DENIED = "error: download_aaxc failed for A Fake Book: LicenseDenied: License not granted"
-
-
-def denied_download(cmd):
-    dest = Path(cmd[cmd.index("-o") + 1])
-    (dest / f"{ASIN}-annotations.json").write_text('{"fresh": true}')
-    (dest / f"{ASIN}-chapters.json").write_text("{}")
+def make_m4b(books):
+    m4b = books / f"Fake [{ASIN}]" / f"Fake [{ASIN}].m4b"
+    m4b.parent.mkdir(parents=True, exist_ok=True)
+    m4b.write_bytes(b"audio")
+    return m4b
 
 
 def fake_download(cmd):
     dest = Path(cmd[cmd.index("-o") + 1])
-    if "--aaxc" in cmd:
-        (dest / f"{ASIN}-AAX_44_128.aaxc").write_bytes(b"audio")
-        (dest / f"{ASIN}-AAX_44_128.voucher").write_text((FIXTURES / "voucher.json").read_text())
     (dest / f"{ASIN}-annotations.json").write_text('{"fresh": true}')
     (dest / f"{ASIN}-chapters.json").write_text("{}")
 
 
-def test_download_book_command_and_files(tmp_path, monkeypatch):
+def test_download_book_command_and_files(tmp_path, books, monkeypatch):
+    m4b = make_m4b(books)
     run = FakeRun(fake_download)
     monkeypatch.setattr(subprocess, "run", run)
+    dest = tmp_path / "cache"
 
-    files = download_book(ASIN, tmp_path, profile="work")
+    files = download_book(ASIN, dest, profile="work")
 
     assert run.calls == [
         [
-            "audible", "-P", "work", "download", "-a", ASIN, "--aaxc",
+            "audible", "-P", "work", "download", "-a", ASIN,
             "--annotation", "--chapter", "--chapter-type", "flat",
-            "-o", str(tmp_path), "-f", "asin_only", "-y", "--no-progress",
+            "-o", str(dest), "-f", "asin_only", "-y", "--no-progress",
         ]
     ]  # fmt: skip
-    assert files.audio == tmp_path / f"{ASIN}-AAX_44_128.aaxc"
-    assert files.key == "00112233445566778899aabbccddeeff"
-    assert files.iv == "ffeeddccbbaa99887766554433221100"
-    assert files.annotations == tmp_path / f"{ASIN}-annotations.json"
-    assert files.chapters == tmp_path / f"{ASIN}-chapters.json"
+    assert files.audio == m4b
+    assert files.annotations == dest / f"{ASIN}-annotations.json"
+    assert files.chapters == dest / f"{ASIN}-chapters.json"
 
 
-def test_download_skips_audio_when_cached(tmp_path, monkeypatch):
-    monkeypatch.setattr(subprocess, "run", FakeRun(fake_download))
-    download_book(ASIN, tmp_path)
+def test_download_refreshes_annotations(tmp_path, books, monkeypatch):
+    make_m4b(books)
     (tmp_path / f"{ASIN}-annotations.json").write_text('{"fresh": false}')
+    monkeypatch.setattr(subprocess, "run", FakeRun(fake_download))
 
-    run = FakeRun(fake_download)
-    monkeypatch.setattr(subprocess, "run", run)
     files = download_book(ASIN, tmp_path)
 
-    assert len(run.calls) == 1
-    assert "--aaxc" not in run.calls[0]
-    assert "--annotation" in run.calls[0]
-    assert files.audio.read_bytes() == b"audio"
     assert json.loads(files.annotations.read_text()) == {"fresh": True}
 
 
-def test_download_without_annotations_file(tmp_path, monkeypatch):
+def test_download_liberates_when_audio_missing(tmp_path, books, monkeypatch):
+    liberated = []
+
+    def fake_liberate(asin):
+        liberated.append(asin)
+        return make_m4b(books)
+
+    monkeypatch.setattr(libation, "liberate", fake_liberate)
+    monkeypatch.setattr(subprocess, "run", FakeRun(fake_download))
+
+    files = download_book(ASIN, tmp_path / "cache")
+
+    assert liberated == [ASIN]
+    assert files.audio.name == f"Fake [{ASIN}].m4b"
+
+
+def test_download_skips_liberate_when_audio_exists(tmp_path, books, monkeypatch):
+    make_m4b(books)
+
+    def fail(asin):
+        raise AssertionError("liberate should not be called")
+
+    monkeypatch.setattr(libation, "liberate", fail)
+    monkeypatch.setattr(subprocess, "run", FakeRun(fake_download))
+    download_book(ASIN, tmp_path / "cache")
+
+
+def test_download_without_annotations_file(tmp_path, books, monkeypatch):
+    make_m4b(books)
+
     def handler(cmd):
         fake_download(cmd)
         (tmp_path / f"{ASIN}-annotations.json").unlink()
@@ -95,78 +116,29 @@ def test_download_without_annotations_file(tmp_path, monkeypatch):
     assert download_book(ASIN, tmp_path).annotations is None
 
 
-def test_download_uses_existing_libation_file(tmp_path, monkeypatch):
-    books = tmp_path / "books"
-    m4b = books / f"Fake [{ASIN}]" / f"Fake [{ASIN}].m4b"
-    m4b.parent.mkdir(parents=True)
-    m4b.write_bytes(b"audio")
-    monkeypatch.setattr(libation, "available", lambda: True)
-    monkeypatch.setattr(libation, "books_dir", lambda: books)
-    run = FakeRun(denied_download)
-    monkeypatch.setattr(subprocess, "run", run)
-
-    files = download_book(ASIN, tmp_path / "cache")
-
-    assert len(run.calls) == 1
-    assert "--aaxc" not in run.calls[0]
-    assert files.audio == m4b
-    assert files.key is None and files.iv is None
-    assert files.annotations is not None and files.chapters is not None
-
-
-def test_download_falls_back_to_libation_on_license_denied(tmp_path, monkeypatch):
-    books = tmp_path / "books"
-    books.mkdir()
-    m4b = books / f"Fake [{ASIN}].m4b"
-    liberated = []
-
-    def fake_liberate(asin):
-        liberated.append(asin)
-        m4b.write_bytes(b"audio")
-        return m4b
-
-    monkeypatch.setattr(libation, "available", lambda: True)
-    monkeypatch.setattr(libation, "books_dir", lambda: books)
-    monkeypatch.setattr(libation, "liberate", fake_liberate)
-    run = FakeRun(denied_download, returncode=1, stdout=DENIED)
-    monkeypatch.setattr(subprocess, "run", run)
-
-    files = download_book(ASIN, tmp_path / "cache")
-
-    assert "--aaxc" in run.calls[0]
-    assert liberated == [ASIN]
-    assert files.audio == m4b
-    assert files.key is None
-    assert files.annotations == tmp_path / "cache" / f"{ASIN}-annotations.json"
-
-
-def test_license_denied_without_libation_raises(tmp_path, monkeypatch):
-    run = FakeRun(denied_download, returncode=1, stdout=DENIED)
+def test_download_requires_libation(tmp_path, monkeypatch):
+    monkeypatch.setattr(libation, "available", lambda: False)
+    run = FakeRun(fake_download)
     monkeypatch.setattr(subprocess, "run", run)
     with pytest.raises(AudibleError, match="Libation"):
         download_book(ASIN, tmp_path)
+    assert run.calls == []
 
 
-def test_libation_failure_becomes_audible_error(tmp_path, monkeypatch):
-    def broken():
-        raise libation.LibationError("no settings")
+def test_libation_failure_becomes_audible_error(tmp_path, books, monkeypatch):
+    def broken(asin):
+        raise libation.LibationError("license problem")
 
-    monkeypatch.setattr(libation, "available", lambda: True)
-    monkeypatch.setattr(libation, "books_dir", broken)
+    monkeypatch.setattr(libation, "liberate", broken)
     monkeypatch.setattr(subprocess, "run", FakeRun(fake_download))
-    with pytest.raises(AudibleError, match="no settings"):
+    with pytest.raises(AudibleError, match="license problem"):
         download_book(ASIN, tmp_path)
 
 
-def test_download_fails_on_other_errors(tmp_path, monkeypatch):
+def test_download_fails_on_audible_error(tmp_path, books, monkeypatch):
+    make_m4b(books)
     monkeypatch.setattr(subprocess, "run", FakeRun(returncode=1, stderr="auth expired"))
     with pytest.raises(AudibleError, match="auth expired"):
-        download_book(ASIN, tmp_path)
-
-
-def test_download_raises_when_audio_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr(subprocess, "run", FakeRun(stdout="nothing to download"))
-    with pytest.raises(AudibleError, match="nothing to download"):
         download_book(ASIN, tmp_path)
 
 

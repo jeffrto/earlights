@@ -4,7 +4,6 @@ __pycache__/
 dist/
 .pytest_cache/
 .ruff_cache/
-*.aaxc
-*.voucher
+*.m4b
 *.epub
 *-annotations.json

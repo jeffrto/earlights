@@ -72,11 +72,6 @@ def parse_chapters(data: dict) -> tuple[list[Chapter], int | None]:
     return chapters, int(runtime) if runtime is not None else None
 
 
-def parse_voucher(data: dict) -> tuple[str, str]:
-    response = data["content_license"]["license_response"]
-    return response["key"], response["iv"]
-
-
 def chapter_at(chapters: list[Chapter], ms: int) -> Chapter | None:
     if not chapters:
         return None
