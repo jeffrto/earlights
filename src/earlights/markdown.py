@@ -35,6 +35,7 @@ def render_markdown(
         blocks.append(_quote(passage.text) if passage.source != "none" else f"> {NO_SPEECH}")
         if marker.note:
             blocks.append(f"**Note:** {marker.note}")
-        if passage.source not in ("transcript", "none"):
+        fallback = passage.source == "transcript" and passage.mode != "transcript"
+        if passage.source in ("epub", "ai") or fallback:
             blocks.append(f"<sub>source: {passage.source}</sub>")
     return "\n\n".join(blocks) + "\n"

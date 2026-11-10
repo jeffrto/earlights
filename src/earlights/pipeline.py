@@ -6,8 +6,10 @@ from pathlib import Path
 from typing import Literal
 
 from . import audible, audio, deepgram
+from .align import find_passage
 from .annotations import parse_annotations, parse_chapters
 from .config import Config, require
+from .epub import BookText, load_epub
 from .markdown import format_time, render_markdown
 from .models import BookInfo, Chapter, Marker, Passage
 from .paths import cache_dir
@@ -41,13 +43,27 @@ def process_book(
     report: Callable[[str], None] = print,
 ) -> Path | None:
     api_key = require(config, "deepgram_api_key")
-    mode = options.mode or ("auto" if options.epub else "transcript")
-    if mode != "transcript" or options.readwise:
+    if options.mode in ("ai", "auto") or options.readwise:
         raise PipelineError(
-            "Only the transcript mode is available: the rest is not implemented yet."
+            "Only the transcript and epub modes are available: the rest is not implemented yet."
         )
+    new_epub = load_epub(options.epub) if options.epub else None
 
     book = _find_book(query, options.profile)
+    state = load_state(book.asin)
+    epub_changed = False
+    if options.epub:
+        epub_path = str(options.epub.resolve())
+        epub_changed = epub_path != state.epub_path
+        state.epub_path = epub_path
+        save_state(state)
+    mode = options.mode or ("epub" if state.epub_path else "transcript")
+    book_text = None
+    if mode == "epub":
+        if not state.epub_path:
+            raise PipelineError("The epub mode needs the book: pass it with --epub.")
+        book_text = new_epub or load_epub(Path(state.epub_path))
+
     report(f"{book.title} [{book.asin}]: fetching bookmarks and audio")
     cache = cache_dir(book.asin)
     files = audible.download_book(book.asin, cache, options.profile)
@@ -60,11 +76,10 @@ def process_book(
     duration_ms = audio.audio_duration_ms(files.audio)
     language = deepgram.deepgram_language(book.language, options.language)
 
-    state = load_state(book.asin)
     failed = 0
     for number, marker in enumerate(markers, 1):
         done = state.passages.get(marker.id)
-        if done and done.mode == mode and not options.force:
+        if done and done.mode == mode and not options.force and not epub_changed:
             continue
         report(f"[{number}/{len(markers)}] {format_time(marker.start_ms)}")
         try:
@@ -75,13 +90,24 @@ def process_book(
             failed += 1
             report(f"Warning: marker at {format_time(marker.start_ms)} failed: {exc}")
             continue
-        state.passages[marker.id] = _transcript_passage(marker, words, duration_ms, mode)
+        passage = _transcript_passage(marker, words, duration_ms, mode)
+        if book_text and passage.text:
+            found = _epub_text(book_text, marker, words, duration_ms)
+            if found:
+                passage = replace(passage, text=found, source="epub")
+            else:
+                at = format_time(marker.start_ms)
+                report(f"Warning: marker at {at} not found in the EPUB, using the transcript.")
+        state.passages[marker.id] = passage
         save_state(state)
 
     _drop_deleted(state, markers)
     if failed:
         plural = "marker" if failed == 1 else "markers"
         report(f"{failed} {plural} failed. Run the command again to retry.")
+    if book_text:
+        found = sum(p.source == "epub" for p in state.passages.values())
+        report(f"{found}/{len(state.passages)} found in EPUB")
 
     out = options.out or Path(f"{_file_name(book.title) or book.asin}.md")
     out.write_text(render_markdown(book, markers, state.passages, chapters), encoding="utf-8")
@@ -152,6 +178,25 @@ def _transcript_passage(
         mode=mode,
         transcript=" ".join(w.text for w in words),
     )
+
+
+def _epub_text(
+    book_text: BookText, marker: Marker, words: list[deepgram.Word], duration_ms: int
+) -> str | None:
+    """The passage as written in the book, located by the whole transcribed window."""
+    window = audio.marker_window(marker, duration_ms)
+    position = 0
+    core_start = core_end = None
+    for word in words:
+        if word.end_ms >= window.core_start_ms and word.start_ms <= window.core_end_ms:
+            if core_start is None:
+                core_start = position
+            core_end = position + len(word.text)
+        position += len(word.text) + 1
+    core = None if core_start is None else (core_start, core_end)
+    ratio = marker.start_ms / duration_ms if duration_ms else None
+    match = find_passage(book_text, " ".join(w.text for w in words), ratio, core)
+    return book_text.text[match.start : match.end] if match else None
 
 
 def _drop_deleted(state: BookState, markers: list[Marker]) -> None:

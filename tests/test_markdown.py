@@ -53,6 +53,12 @@ def test_source_line_for_non_transcript_passages():
     assert out.endswith("> Text.\n\n<sub>source: epub</sub>\n")
 
 
+def test_transcript_fallback_is_marked_outside_transcript_mode():
+    fallback = Passage("a", "Text.", source="transcript", mode="epub", transcript="Text.")
+    out = render_markdown(BOOK, [marker("a", 0)], {"a": fallback}, CHAPTERS)
+    assert out.endswith("> Text.\n\n<sub>source: transcript</sub>\n")
+
+
 def test_no_chapters_and_no_authors():
     book = BookInfo(asin="X", title="Solo", authors=[])
     out = render_markdown(book, [marker("a", 1000)], {"a": passage("a", "Text.")}, [])

@@ -7,10 +7,19 @@ from .audible import AudibleError, list_library
 from .audio import AudioError
 from .config import ConfigError, load_config
 from .deepgram import DeepgramError
+from .epub import EpubError
 from .pipeline import Options, PipelineError, process_book
 from .state import StateError
 
-ERRORS = (AudibleError, AudioError, ConfigError, DeepgramError, PipelineError, StateError)
+ERRORS = (
+    AudibleError,
+    AudioError,
+    ConfigError,
+    DeepgramError,
+    EpubError,
+    PipelineError,
+    StateError,
+)
 
 
 @click.group()
@@ -37,9 +46,13 @@ def library(profile: str | None) -> None:
 @click.option(
     "--mode",
     type=click.Choice(["transcript", "epub", "ai", "auto"]),
-    help="How to get the text. Default: transcript, or auto when an EPUB is known.",
+    help="How to get the text. Default: transcript, or epub when an EPUB is known.",
 )
-@click.option("--epub", type=click.Path(path_type=Path), help="EPUB of the same book.")
+@click.option(
+    "--epub",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="EPUB of the same edition. Remembered for the next runs.",
+)
 @click.option("--lang", help="Language code for the transcription, e.g. pt-BR.")
 @click.option("--out", type=click.Path(path_type=Path), help="Markdown file to write.")
 @click.option("--readwise", is_flag=True, help="Send the highlights to Readwise.")
@@ -56,8 +69,8 @@ def process(
     profile: str | None,
 ) -> None:
     """Turn the bookmarks of BOOK (ASIN or part of the title) into a Markdown file."""
-    if mode not in (None, "transcript") or epub or readwise:
-        raise click.UsageError("not implemented yet: only the transcript mode works for now")
+    if mode in ("ai", "auto") or readwise:
+        raise click.UsageError("not implemented yet: use the transcript or epub mode for now")
     options = Options(
         mode=mode,
         epub=epub,

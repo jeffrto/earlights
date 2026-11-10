@@ -7,9 +7,11 @@ from earlights import audible, audio, deepgram
 from earlights.audible import AudibleError
 from earlights.config import Config, ConfigError
 from earlights.deepgram import DeepgramAuthError, DeepgramError
+from earlights.epub import EpubError
 from earlights.models import BookFiles, BookInfo
 from earlights.pipeline import Options, PipelineError, process_book
 from earlights.state import load_state, save_state
+from fixtures.make_epub import make_epub
 
 ASIN = "B000FAKE01"
 CONFIG = Config(deepgram_api_key="dg-key")
@@ -49,6 +51,7 @@ class Env:
         self.fetches: list[tuple[str, str, str, str]] = []
         self.fail_fetch: dict[int, Exception] = {}
         self.transcript = SPEECH
+        self.transcripts: list[dict] = []
         self.reports: list[str] = []
 
     def info(self):
@@ -82,7 +85,7 @@ class Env:
         error = self.fail_fetch.get(len(self.fetches))
         if error:
             raise error
-        return self.transcript
+        return self.transcripts.pop(0) if self.transcripts else self.transcript
 
     def run(self, query=ASIN, config=CONFIG, **options):
         options.setdefault("out", self.tmp_path / "out.md")
@@ -142,7 +145,9 @@ def test_process_fails_fast_without_deepgram_key(env, monkeypatch):
 def test_unimplemented_mode_fails_before_any_call(env, monkeypatch):
     monkeypatch.setattr(audible, "get_book_info", lambda *a, **k: 1 / 0)
     with pytest.raises(PipelineError, match="not implemented"):
-        env.run(mode="epub")
+        env.run(mode="ai")
+    with pytest.raises(PipelineError, match="not implemented"):
+        env.run(mode="auto")
 
 
 def test_state_saved_per_marker(env):
@@ -258,3 +263,105 @@ def test_undecodable_audio_stops_before_any_clip(env, monkeypatch):
     with pytest.raises(audio.AudioError):
         env.run()
     assert env.cuts == []
+
+
+def spoken(text, start, step=0.4):
+    return [(w, start + i * step, start + i * step + 0.3) for i, w in enumerate(text.split())]
+
+
+# Marker m1 is at 60 s and its clip starts at 35 s: the core is 10 s to 40 s of the clip.
+STORM = response(
+    *spoken("were the three words painted above the door. The Storm.", 2.0),
+    *spoken(
+        "On the 9th night of October the wind turned and the waves began to brake over "
+        "the rocks. Nobody in the village had seen a storm like that since the old bridge "
+        "was washed away.",
+        12.0,
+    ),
+    *spoken("Light the lamp shouted the keeper. Nobody answered him because the boy", 42.0),
+)
+
+
+@pytest.fixture
+def epub(tmp_path):
+    return make_epub(tmp_path / "book.epub")
+
+
+def test_epub_mode_uses_the_book_text(env, epub):
+    env.records = [record("m1", 60_000)]
+    env.transcript = STORM
+
+    out = env.run(epub=epub)
+
+    state = load_state(ASIN)
+    passage = state.passages["m1"]
+    assert (passage.source, passage.mode) == ("epub", "epub")
+    assert passage.text.startswith("On the ninth night of October the wind turned")
+    assert passage.text.endswith("the old bridge was washed away.")
+    assert "9th" in passage.transcript
+    assert state.epub_path == str(epub.resolve())
+    assert "<sub>source: epub</sub>" in out.read_text()
+    assert "1/1 found in EPUB" in env.reports
+
+
+def test_pipeline_epub_fallback_to_transcript(env, epub):
+    env.transcripts = [STORM, SPEECH]
+
+    out = env.run(mode="epub", epub=epub)
+
+    passages = load_state(ASIN).passages
+    assert passages["m1"].source == "epub"
+    assert (passages["m2"].source, passages["m2"].mode) == ("transcript", "epub")
+    assert passages["m2"].text == "Hello there world."
+    assert any("00:05:00" in r and "not found in the EPUB" in r for r in env.reports)
+    assert "1/2 found in EPUB" in env.reports
+    assert "<sub>source: transcript</sub>" in out.read_text()
+
+
+def test_epub_is_remembered_and_reprocesses_transcript_passages(env, epub):
+    env.records = [record("m1", 60_000)]
+    env.transcript = STORM
+    env.run()
+    assert load_state(ASIN).passages["m1"].source == "transcript"
+
+    env.run(epub=epub, mode="transcript")
+    assert load_state(ASIN).passages["m1"].source == "transcript"
+
+    env.run()
+    assert load_state(ASIN).passages["m1"].source == "epub"
+    assert len(env.fetches) == 1
+
+
+def test_new_epub_reprocesses_everything(env, epub, tmp_path):
+    env.records = [record("m1", 60_000)]
+    env.transcript = STORM
+    unrelated = "<html><body><p>Unrelated words.</p></body></html>"
+    other = make_epub(tmp_path / "other.epub", [unrelated])
+    env.run(epub=other)
+    assert load_state(ASIN).passages["m1"].source == "transcript"
+
+    env.run(epub=epub)
+    assert load_state(ASIN).passages["m1"].source == "epub"
+
+
+def test_epub_mode_without_epub(env):
+    with pytest.raises(PipelineError, match="--epub"):
+        env.run(mode="epub")
+    assert env.fetches == []
+
+
+def test_bad_epub_fails_before_the_download(env, tmp_path, monkeypatch):
+    monkeypatch.setattr(audible, "download_book", lambda *a, **k: 1 / 0)
+    bad = tmp_path / "bad.epub"
+    bad.write_text("nope")
+    with pytest.raises(EpubError):
+        env.run(epub=bad)
+    with pytest.raises(EpubError):
+        env.run(epub=tmp_path / "missing.epub")
+
+
+def test_no_speech_marker_stays_none_in_epub_mode(env, epub):
+    env.transcript = response()
+    env.run(epub=epub)
+    assert load_state(ASIN).passages["m1"].source == "none"
+    assert "0/2 found in EPUB" in env.reports

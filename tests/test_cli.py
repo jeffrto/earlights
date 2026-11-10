@@ -60,14 +60,31 @@ def test_process_passes_options(monkeypatch, tmp_path):
     assert seen["options"] == Options(language="pt-BR", force=True, out=tmp_path / "o.md")
 
 
-@pytest.mark.parametrize(
-    "args", [["--mode", "epub"], ["--mode", "auto"], ["--epub", "x.epub"], ["--readwise"]]
-)
+@pytest.mark.parametrize("args", [["--mode", "ai"], ["--mode", "auto"], ["--readwise"]])
 def test_process_unimplemented_options(args, monkeypatch):
     monkeypatch.setattr(cli, "process_book", lambda *a, **k: 1 / 0)
     result = CliRunner().invoke(main, ["process", "book", *args])
     assert result.exit_code == 2
     assert "not implemented yet" in result.output
+
+
+def test_process_passes_epub_options(monkeypatch, tmp_path):
+    seen = {}
+    epub = tmp_path / "book.epub"
+    epub.write_bytes(b"")
+    monkeypatch.setattr(cli, "process_book", lambda query, options, *a: seen.update(o=options))
+    monkeypatch.setattr(cli, "load_config", lambda: Config(deepgram_api_key="k"))
+
+    result = CliRunner().invoke(main, ["process", "book", "--mode", "epub", "--epub", str(epub)])
+
+    assert result.exit_code == 0
+    assert seen["o"] == Options(mode="epub", epub=epub)
+
+
+def test_process_rejects_missing_epub_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "process_book", lambda *a, **k: 1 / 0)
+    result = CliRunner().invoke(main, ["process", "book", "--epub", str(tmp_path / "no.epub")])
+    assert result.exit_code == 2
 
 
 def test_process_reports_errors(monkeypatch):
