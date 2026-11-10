@@ -56,6 +56,7 @@ def process_book(
         report("This book has no bookmarks or clips.")
         return None
     chapters = _chapters(files.chapters)
+    audio.check_decodable(files.audio)
     duration_ms = audio.audio_duration_ms(files.audio)
     language = deepgram.deepgram_language(book.language, options.language)
 
@@ -129,7 +130,7 @@ def _transcribe(
     if cached.exists():
         data = json.loads(cached.read_text(encoding="utf-8"))
     else:
-        clip = audio.cut_clip(src, window.start_ms, window.end_ms, cache / "clips" / f"{name}.m4a")
+        clip = audio.cut_clip(src, window.start_ms, window.end_ms, cache / "clips" / f"{name}.flac")
         data = deepgram.fetch_transcript(clip, language, api_key, model)
         cached.parent.mkdir(parents=True, exist_ok=True)
         cached.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")

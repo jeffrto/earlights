@@ -5,7 +5,13 @@ from datetime import datetime
 import pytest
 
 from earlights import audio
-from earlights.audio import AudioError, audio_duration_ms, cut_clip, marker_window
+from earlights.audio import (
+    AudioError,
+    audio_duration_ms,
+    check_decodable,
+    cut_clip,
+    marker_window,
+)
 from earlights.models import Marker
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
@@ -70,14 +76,41 @@ def test_audio_duration(sine):
 
 @needs_ffmpeg
 def test_cut_clip_duration(sine, tmp_path):
-    dest = cut_clip(sine, 10_000, 20_000, tmp_path / "clips" / "clip.m4a")
+    dest = cut_clip(sine, 10_000, 20_000, tmp_path / "clips" / "clip.flac")
     assert dest.exists()
     assert audio_duration_ms(dest) == pytest.approx(10_000, abs=500)
 
 
+def probe(path, entries):
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", entries, "-of", "csv=p=0", str(path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.split()
+
+
+@needs_ffmpeg
+def test_cut_clip_is_reencoded_to_mono_flac(sine, tmp_path):
+    dest = cut_clip(sine, 10_000, 20_000, tmp_path / "clip.flac")
+    assert probe(dest, "stream=codec_name,channels") == ["flac,1"]
+
+
+@needs_ffmpeg
+def test_check_decodable_accepts_plain_aac(sine):
+    check_decodable(sine)
+
+
+def test_check_decodable_rejects_xhe_aac(tmp_path, monkeypatch):
+    monkeypatch.setattr(audio, "_run", lambda args: "xHE-AAC\n")
+    with pytest.raises(AudioError, match="xHE-AAC"):
+        check_decodable(tmp_path / "book.m4b")
+
+
 @needs_ffmpeg
 def test_cut_clip_cached(sine, tmp_path, monkeypatch):
-    dest = cut_clip(sine, 10_000, 20_000, tmp_path / "clip.m4a")
+    dest = cut_clip(sine, 10_000, 20_000, tmp_path / "clip.flac")
 
     def fail(*args, **kwargs):
         raise AssertionError("ffmpeg should not run again")
@@ -88,7 +121,7 @@ def test_cut_clip_cached(sine, tmp_path, monkeypatch):
 
 @needs_ffmpeg
 def test_cut_clip_failure_leaves_no_file(tmp_path):
-    dest = tmp_path / "clip.m4a"
+    dest = tmp_path / "clip.flac"
     with pytest.raises(AudioError):
         cut_clip(tmp_path / "missing.m4b", 0, 1_000, dest)
     assert not dest.exists()
@@ -96,7 +129,7 @@ def test_cut_clip_failure_leaves_no_file(tmp_path):
 
 def test_cut_clip_rejects_empty_range(tmp_path):
     with pytest.raises(AudioError):
-        cut_clip(tmp_path / "a.m4b", 5_000, 5_000, tmp_path / "clip.m4a")
+        cut_clip(tmp_path / "a.m4b", 5_000, 5_000, tmp_path / "clip.flac")
 
 
 def test_missing_ffmpeg(tmp_path, monkeypatch):
@@ -105,4 +138,4 @@ def test_missing_ffmpeg(tmp_path, monkeypatch):
 
     monkeypatch.setattr(audio.subprocess, "run", missing)
     with pytest.raises(AudioError, match="ffmpeg"):
-        cut_clip(tmp_path / "a.m4b", 0, 1_000, tmp_path / "clip.m4a")
+        cut_clip(tmp_path / "a.m4b", 0, 1_000, tmp_path / "clip.flac")

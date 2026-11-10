@@ -64,7 +64,7 @@ def fetch_transcript(
             "smart_format": "true",
             "punctuate": "true",
         },
-        "headers": {"Authorization": f"Token {api_key}", "Content-Type": "audio/mp4"},
+        "headers": {"Authorization": f"Token {api_key}", "Content-Type": "audio/flac"},
         "content": audio.read_bytes(),
         "timeout": TIMEOUT,
     }

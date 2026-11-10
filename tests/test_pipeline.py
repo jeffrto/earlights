@@ -96,6 +96,7 @@ def env(tmp_path, dirs, monkeypatch):
     monkeypatch.setattr(audible, "get_book_info", env.get_book_info)
     monkeypatch.setattr(audible, "download_book", env.download_book)
     monkeypatch.setattr(audio, "audio_duration_ms", lambda src: 600_000)
+    monkeypatch.setattr(audio, "check_decodable", lambda src: None)
     monkeypatch.setattr(audio, "cut_clip", env.cut_clip)
     monkeypatch.setattr(deepgram, "fetch_transcript", env.fetch_transcript)
     return env
@@ -246,4 +247,14 @@ def test_marker_ids_are_safe_file_names(env):
     env.records = [record(None, 60_000)]
     env.run()
     names = [p.name for p in (env.tmp_path / "cache" / ASIN / "clips").iterdir()]
-    assert names == ["audible.bookmark_60000-35000-85000.m4a"]
+    assert names == ["audible.bookmark_60000-35000-85000.flac"]
+
+
+def test_undecodable_audio_stops_before_any_clip(env, monkeypatch):
+    def reject(src):
+        raise audio.AudioError("xHE-AAC")
+
+    monkeypatch.setattr(audio, "check_decodable", reject)
+    with pytest.raises(audio.AudioError):
+        env.run()
+    assert env.cuts == []

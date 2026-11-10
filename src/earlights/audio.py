@@ -60,6 +60,18 @@ def audio_duration_ms(src: Path) -> int:
         raise AudioError(f"Could not read the duration of {src}.") from None
 
 
+def check_decodable(src: Path) -> None:
+    out = _run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=profile"]
+        + ["-of", "default=noprint_wrappers=1:nokey=1", str(src)]
+    )
+    if out.strip() == "xHE-AAC":
+        raise AudioError(
+            f"{src.name} is xHE-AAC, which ffmpeg cannot decode reliably. "
+            "Turn off Request_xHE_AAC in Libation and download the book again."
+        )
+
+
 def cut_clip(src: Path, start_ms: int, end_ms: int, dest: Path) -> Path:
     if dest.exists():
         return dest
@@ -71,7 +83,7 @@ def cut_clip(src: Path, start_ms: int, end_ms: int, dest: Path) -> Path:
         _run(
             ["ffmpeg", "-y", "-loglevel", "error"]
             + ["-ss", f"{start_ms / 1000:.3f}", "-t", f"{(end_ms - start_ms) / 1000:.3f}"]
-            + ["-i", str(src), "-vn", "-c:a", "copy", str(part)]
+            + ["-i", str(src), "-map", "0:a:0", "-ac", "1", "-c:a", "flac", str(part)]
         )
     except AudioError:
         part.unlink(missing_ok=True)

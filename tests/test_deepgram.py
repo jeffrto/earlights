@@ -39,7 +39,7 @@ WORDS = [Word("Hello", 500, 900), Word("world.", 1000, 1400)]
 
 @pytest.fixture
 def clip(tmp_path):
-    path = tmp_path / "clip.m4a"
+    path = tmp_path / "clip.flac"
     path.write_bytes(b"audio-bytes")
     return path
 
@@ -61,7 +61,7 @@ def test_transcribe_parses_words(httpx_mock, clip):
         "punctuate": "true",
     }
     assert request.headers["Authorization"] == "Token secret"
-    assert request.headers["Content-Type"] == "audio/mp4"
+    assert request.headers["Content-Type"] == "audio/flac"
     assert request.content == b"audio-bytes"
 
 
