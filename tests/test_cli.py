@@ -61,11 +61,11 @@ def test_process_passes_options(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("args", [["--mode", "ai"], ["--mode", "auto"]])
-def test_process_unimplemented_options(args, monkeypatch):
+def test_process_rejects_unknown_modes(args, monkeypatch):
     monkeypatch.setattr(cli, "process_book", lambda *a, **k: 1 / 0)
     result = CliRunner().invoke(main, ["process", "book", *args])
     assert result.exit_code == 2
-    assert "not implemented yet" in result.output
+    assert "Invalid value" in result.output
 
 
 def test_process_passes_epub_options(monkeypatch, tmp_path):

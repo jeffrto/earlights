@@ -47,7 +47,7 @@ def library(profile: str | None) -> None:
 @click.argument("book")
 @click.option(
     "--mode",
-    type=click.Choice(["transcript", "epub", "ai", "auto"]),
+    type=click.Choice(["transcript", "epub"]),
     help="How to get the text. Default: transcript, or epub when an EPUB is known.",
 )
 @click.option(
@@ -71,8 +71,6 @@ def process(
     profile: str | None,
 ) -> None:
     """Turn the bookmarks of BOOK (ASIN or part of the title) into a Markdown file."""
-    if mode in ("ai", "auto"):
-        raise click.UsageError("not implemented yet: use the transcript or epub mode for now")
     options = Options(
         mode=mode,
         epub=epub,
