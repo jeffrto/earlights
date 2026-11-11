@@ -365,3 +365,37 @@ def test_no_speech_marker_stays_none_in_epub_mode(env, epub):
     env.run(epub=epub)
     assert load_state(ASIN).passages["m1"].source == "none"
     assert "0/2 found in EPUB" in env.reports
+
+
+def test_overlapping_markers_become_one_passage_with_both_notes(env):
+    note = {"type": "audible.note", "creationTime": "2026-01-01 10:00:00.0"}
+    env.records = [
+        record("m1", 60_000),
+        record("m2", 70_000),
+        note | {"annotationId": "n1", "startPosition": "60000", "text": "first note"},
+        note | {"annotationId": "n2", "startPosition": "70000", "text": "second note"},
+        record("m3", 300_000),
+    ]
+
+    out = env.run()
+
+    assert env.cuts == [(35_000, 95_000), (275_000, 325_000)]
+    passages = load_state(ASIN).passages
+    assert len(passages) == 2
+    assert "m3" in passages
+    text = out.read_text(encoding="utf-8")
+    assert text.count("## ") == 2
+    assert "## 00:00:45" in text
+    assert "**Note:** first note\n\nsecond note" in text
+
+
+def test_passages_of_the_single_markers_are_dropped_after_a_merge(env):
+    env.run()
+    env.records = [record("m1", 60_000), record("m1b", 62_000), record("m2", 300_000)]
+
+    env.run()
+
+    passages = load_state(ASIN).passages
+    assert len(passages) == 2
+    assert "m1" not in passages
+    assert len(env.fetches) == 3

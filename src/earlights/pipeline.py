@@ -74,6 +74,7 @@ def process_book(
     chapters = _chapters(files.chapters)
     audio.check_decodable(files.audio)
     duration_ms = audio.audio_duration_ms(files.audio)
+    markers = audio.merge_overlapping(markers, duration_ms)
     language = deepgram.deepgram_language(book.language, options.language)
 
     failed = 0

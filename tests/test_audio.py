@@ -11,22 +11,16 @@ from earlights.audio import (
     check_decodable,
     cut_clip,
     marker_window,
+    merge_overlapping,
 )
 from earlights.models import Marker
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
 
-def make_marker(start_ms, end_ms=None):
+def make_marker(start_ms, end_ms=None, id="m1", note=None, created=datetime(2026, 1, 1)):
     kind = "clip" if end_ms is not None else "bookmark"
-    return Marker(
-        id="m1",
-        kind=kind,
-        start_ms=start_ms,
-        end_ms=end_ms,
-        note=None,
-        created=datetime(2026, 1, 1),
-    )
+    return Marker(id=id, kind=kind, start_ms=start_ms, end_ms=end_ms, note=note, created=created)
 
 
 @pytest.fixture
@@ -139,3 +133,59 @@ def test_missing_ffmpeg(tmp_path, monkeypatch):
     monkeypatch.setattr(audio.subprocess, "run", missing)
     with pytest.raises(AudioError, match="ffmpeg"):
         cut_clip(tmp_path / "a.m4b", 0, 1_000, tmp_path / "clip.flac")
+
+
+def test_merge_keeps_separate_markers_untouched():
+    markers = [make_marker(60_000, id="a"), make_marker(300_000, id="b")]
+    assert merge_overlapping(markers, 600_000) == markers
+
+
+def test_merge_clip_and_bookmark_at_the_same_position():
+    clip = make_marker(100_000, 130_000, id="clip", created=datetime(2026, 1, 2))
+    bookmark = make_marker(100_000, id="mark", created=datetime(2026, 1, 1))
+
+    [merged] = merge_overlapping([clip, bookmark], 600_000)
+
+    assert (merged.kind, merged.start_ms, merged.end_ms) == ("clip", 85_000, 130_000)
+    assert merged.created == datetime(2026, 1, 1)
+    window = marker_window(merged, 600_000)
+    assert (window.core_start_ms, window.core_end_ms) == (85_000, 130_000)
+
+
+def test_merge_chains_markers_and_stops_at_a_gap():
+    markers = [
+        make_marker(100_000, id="a"),
+        make_marker(120_000, id="b"),
+        make_marker(145_000, id="c"),
+        make_marker(200_000, id="d"),
+    ]
+
+    merged = merge_overlapping(markers, 600_000)
+
+    assert [(m.start_ms, m.end_ms) for m in merged] == [(85_000, 160_000), (200_000, None)]
+    assert merged[1] == markers[3]
+
+
+def test_merge_joins_notes_without_repeating():
+    markers = [
+        make_marker(100_000, id="a", note="first"),
+        make_marker(105_000, id="b"),
+        make_marker(110_000, id="c", note="second"),
+        make_marker(112_000, id="d", note="first"),
+    ]
+
+    [merged] = merge_overlapping(markers, 600_000)
+
+    assert merged.note == "first\n\nsecond"
+
+
+def test_merged_id_changes_when_the_group_changes():
+    a, b, c = (make_marker(100_000 + i * 5_000, id=name) for i, name in enumerate("abc"))
+
+    [two] = merge_overlapping([a, b], 600_000)
+    [three] = merge_overlapping([a, b, c], 600_000)
+    [again] = merge_overlapping([b, a], 600_000)
+
+    assert two.id.startswith("a+")
+    assert two.id != three.id
+    assert two.id == again.id

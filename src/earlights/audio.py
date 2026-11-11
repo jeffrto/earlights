@@ -1,3 +1,4 @@
+import hashlib
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,36 @@ def marker_window(marker: Marker, runtime_ms: int | None) -> Window:
         core_end_ms=core_end,
         start_ms=clamp(core_start - MARGIN_MS),
         end_ms=clamp(core_end + MARGIN_MS),
+    )
+
+
+def merge_overlapping(markers: list[Marker], runtime_ms: int | None) -> list[Marker]:
+    """Markers whose ranges overlap become a single clip covering all of them."""
+    groups: list[tuple[int, int, list[Marker]]] = []
+    ranged = [(marker_window(m, runtime_ms), m) for m in markers]
+    for window, marker in sorted(ranged, key=lambda item: item[0].core_start_ms):
+        if groups and window.core_start_ms <= groups[-1][1]:
+            start, end, members = groups[-1]
+            groups[-1] = (start, max(end, window.core_end_ms), [*members, marker])
+        else:
+            groups.append((window.core_start_ms, window.core_end_ms, [marker]))
+    return [
+        members[0] if len(members) == 1 else _merged(start, end, members)
+        for start, end, members in groups
+    ]
+
+
+def _merged(start_ms: int, end_ms: int, members: list[Marker]) -> Marker:
+    ids = sorted(m.id for m in members)
+    digest = hashlib.sha1("|".join(ids).encode()).hexdigest()[:8]
+    notes = list(dict.fromkeys(m.note for m in members if m.note))
+    return Marker(
+        id=f"{ids[0]}+{digest}",
+        kind="clip",
+        start_ms=start_ms,
+        end_ms=end_ms,
+        note="\n\n".join(notes) or None,
+        created=min(m.created for m in members),
     )
 
 

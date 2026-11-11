@@ -13,7 +13,14 @@ from lxml import etree
 
 _WORD = re.compile(r"[^\W_]+(?:['’][^\W_]+)*")
 _HTML_TYPES = frozenset({"application/xhtml+xml", "text/html"})
-_SKIPPED = frozenset({"head", "nav", "script", "style", "template"})
+_SKIPPED = frozenset(
+    {"head", "nav", "script", "style", "template", "h1", "h2", "h3", "h4", "h5", "h6"}
+)
+_NOTE_TYPES = frozenset(
+    "footnote footnotes endnote endnotes rearnote rearnotes noteref "
+    "doc-footnote doc-endnote doc-endnotes doc-noteref".split()
+)
+_NOTE_CLASS = re.compile(r"footnote|endnote|noteref")
 _BLOCKS = frozenset(
     "address article aside blockquote body caption dd div dl dt figcaption figure footer "
     "h1 h2 h3 h4 h5 h6 header hr li main ol p pre section table td th tr ul".split()
@@ -103,6 +110,16 @@ def _spine(archive: zipfile.ZipFile) -> list[str]:
     return names
 
 
+def _is_note(tag: Tag) -> bool:
+    """Footnote text or a reference to one."""
+    if tag.name == "sup" and tag.find("a") is not None:
+        return True
+    types = f"{tag.get('epub:type') or ''} {tag.get('role') or ''}".split()
+    if _NOTE_TYPES.intersection(types):
+        return True
+    return bool(_NOTE_CLASS.search(" ".join(tag.get("class") or [])))
+
+
 def _paragraphs(markup: bytes) -> list[str]:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", XMLParsedAsHTMLWarning)
@@ -119,7 +136,7 @@ def _paragraphs(markup: bytes) -> list[str]:
     def walk(node: Tag) -> None:
         for child in node.children:
             if isinstance(child, Tag):
-                if child.name in _SKIPPED:
+                if child.name in _SKIPPED or _is_note(child):
                     continue
                 if child.name == "br":
                     buffer.append(" ")
