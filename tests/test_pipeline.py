@@ -3,18 +3,19 @@ from pathlib import Path
 
 import pytest
 
-from earlights import audible, audio, deepgram
+from earlights import audible, audio, deepgram, readwise
 from earlights.audible import AudibleError
 from earlights.config import Config, ConfigError
 from earlights.deepgram import DeepgramAuthError, DeepgramError
 from earlights.epub import EpubError
 from earlights.models import BookFiles, BookInfo
 from earlights.pipeline import Options, PipelineError, process_book
+from earlights.readwise import ReadwiseError
 from earlights.state import load_state, save_state
 from fixtures.make_epub import make_epub
 
 ASIN = "B000FAKE01"
-CONFIG = Config(deepgram_api_key="dg-key")
+CONFIG = Config(deepgram_api_key="dg-key", readwise_token="rw-token")
 
 
 def record(id, start, type="audible.bookmark"):
@@ -53,6 +54,8 @@ class Env:
         self.transcript = SPEECH
         self.transcripts: list[dict] = []
         self.reports: list[str] = []
+        self.sent: list[list[dict]] = []
+        self.fail_send: dict[int, Exception] = {}
 
     def info(self):
         return BookInfo(ASIN, self.title, ["Ann Author"], language=self.language)
@@ -87,6 +90,13 @@ class Env:
             raise error
         return self.transcripts.pop(0) if self.transcripts else self.transcript
 
+    def send_highlights(self, highlights, token):
+        assert token == "rw-token"
+        error = self.fail_send.pop(len(self.sent) + 1, None)
+        if error:
+            raise error
+        self.sent.append(highlights)
+
     def run(self, query=ASIN, config=CONFIG, **options):
         options.setdefault("out", self.tmp_path / "out.md")
         return process_book(query, Options(**options), config, self.reports.append)
@@ -102,6 +112,7 @@ def env(tmp_path, dirs, monkeypatch):
     monkeypatch.setattr(audio, "check_decodable", lambda src: None)
     monkeypatch.setattr(audio, "cut_clip", env.cut_clip)
     monkeypatch.setattr(deepgram, "fetch_transcript", env.fetch_transcript)
+    monkeypatch.setattr(readwise, "send_highlights", env.send_highlights)
     return env
 
 
@@ -230,12 +241,14 @@ def test_language_change_transcribes_again(env):
     assert len(env.fetches) == 4
 
 
-def test_no_bookmarks_returns_none(env):
+def test_process_no_markers(env):
     env.records = None
     assert env.run() is None
     env.records = []
-    assert env.run() is None
+    assert env.run(readwise=True) is None
     assert not (env.tmp_path / "out.md").exists()
+    assert env.reports[-1] == "No bookmarks found for Fake Book."
+    assert env.sent == []
 
 
 def test_default_output_name_is_sanitized(env, monkeypatch):
@@ -399,3 +412,58 @@ def test_passages_of_the_single_markers_are_dropped_after_a_merge(env):
     assert len(passages) == 2
     assert "m1" not in passages
     assert len(env.fetches) == 3
+
+
+def test_pipeline_sends_only_unsent(env):
+    env.run(readwise=True)
+
+    assert [[h["text"] for h in batch] for batch in env.sent] == [["Hello there world."] * 2]
+    assert [h["location"] for h in env.sent[0]] == [60, 300]
+    assert env.sent[0][0]["title"] == "Fake Book"
+    assert load_state(ASIN).sent == {"m1", "m2"}
+    assert "Sent 2 highlights to Readwise." in env.reports
+
+    env.run(readwise=True)
+    assert len(env.sent) == 1
+    assert env.reports[-1] == "Nothing new to send to Readwise."
+
+    env.records.append(record("m3", 500_000))
+    env.run(readwise=True)
+    assert [h["location"] for h in env.sent[1]] == [500]
+    assert "Sent 1 highlight to Readwise." in env.reports
+
+
+def test_pipeline_does_not_send_without_the_flag(env):
+    env.run()
+    assert env.sent == []
+    assert load_state(ASIN).sent == set()
+
+
+def test_pipeline_skips_empty_passages(env):
+    env.transcripts = [response(), SPEECH]
+
+    env.run(readwise=True)
+
+    assert [h["location"] for h in env.sent[0]] == [300]
+    assert load_state(ASIN).sent == {"m2"}
+
+
+def test_pipeline_saves_sent_after_each_batch(env, monkeypatch):
+    monkeypatch.setattr(readwise, "BATCH_SIZE", 1)
+    env.fail_send[2] = ReadwiseError("boom")
+
+    with pytest.raises(ReadwiseError):
+        env.run(readwise=True)
+
+    assert load_state(ASIN).sent == {"m1"}
+    assert (env.tmp_path / "out.md").exists()
+
+    env.run(readwise=True)
+    assert [h["location"] for h in env.sent[1]] == [300]
+    assert load_state(ASIN).sent == {"m1", "m2"}
+
+
+def test_readwise_fails_fast_without_token(env, monkeypatch):
+    monkeypatch.setattr(audible, "get_book_info", lambda *a, **k: 1 / 0)
+    with pytest.raises(ConfigError, match="READWISE_TOKEN"):
+        env.run(config=Config(deepgram_api_key="dg-key"), readwise=True)

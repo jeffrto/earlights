@@ -60,7 +60,7 @@ def test_process_passes_options(monkeypatch, tmp_path):
     assert seen["options"] == Options(language="pt-BR", force=True, out=tmp_path / "o.md")
 
 
-@pytest.mark.parametrize("args", [["--mode", "ai"], ["--mode", "auto"], ["--readwise"]])
+@pytest.mark.parametrize("args", [["--mode", "ai"], ["--mode", "auto"]])
 def test_process_unimplemented_options(args, monkeypatch):
     monkeypatch.setattr(cli, "process_book", lambda *a, **k: 1 / 0)
     result = CliRunner().invoke(main, ["process", "book", *args])

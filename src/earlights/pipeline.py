@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from . import audible, audio, deepgram
+from . import audible, audio, deepgram, readwise
 from .align import find_passage
 from .annotations import parse_annotations, parse_chapters
 from .config import Config, require
@@ -43,10 +43,11 @@ def process_book(
     report: Callable[[str], None] = print,
 ) -> Path | None:
     api_key = require(config, "deepgram_api_key")
-    if options.mode in ("ai", "auto") or options.readwise:
+    if options.mode in ("ai", "auto"):
         raise PipelineError(
             "Only the transcript and epub modes are available: the rest is not implemented yet."
         )
+    token = require(config, "readwise_token") if options.readwise else None
     new_epub = load_epub(options.epub) if options.epub else None
 
     book = _find_book(query, options.profile)
@@ -69,7 +70,7 @@ def process_book(
     files = audible.download_book(book.asin, cache, options.profile)
     markers = parse_annotations(_read_json(files.annotations))
     if not markers:
-        report("This book has no bookmarks or clips.")
+        report(f"No bookmarks found for {book.title}.")
         return None
     chapters = _chapters(files.chapters)
     audio.check_decodable(files.audio)
@@ -112,7 +113,35 @@ def process_book(
 
     out = options.out or Path(f"{_file_name(book.title) or book.asin}.md")
     out.write_text(render_markdown(book, markers, state.passages, chapters), encoding="utf-8")
+    if token:
+        _send_to_readwise(book, markers, state, token, report)
     return out
+
+
+def _send_to_readwise(
+    book: BookInfo,
+    markers: list[Marker],
+    state: BookState,
+    token: str,
+    report: Callable[[str], None],
+) -> None:
+    pending = [
+        (marker.id, readwise.build_highlight(book, marker, state.passages[marker.id]))
+        for marker in markers
+        if marker.id in state.passages
+        and marker.id not in state.sent
+        and state.passages[marker.id].source != "none"
+    ]
+    if not pending:
+        report("Nothing new to send to Readwise.")
+        return
+    for start in range(0, len(pending), readwise.BATCH_SIZE):
+        batch = pending[start : start + readwise.BATCH_SIZE]
+        readwise.send_highlights([highlight for _, highlight in batch], token)
+        state.sent.update(marker_id for marker_id, _ in batch)
+        save_state(state)
+    plural = "highlight" if len(pending) == 1 else "highlights"
+    report(f"Sent {len(pending)} {plural} to Readwise.")
 
 
 def _find_book(query: str, profile: str | None) -> BookInfo:

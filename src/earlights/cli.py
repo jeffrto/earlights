@@ -9,6 +9,7 @@ from .config import ConfigError, load_config
 from .deepgram import DeepgramError
 from .epub import EpubError
 from .pipeline import Options, PipelineError, process_book
+from .readwise import ReadwiseError
 from .state import StateError
 
 ERRORS = (
@@ -18,6 +19,7 @@ ERRORS = (
     DeepgramError,
     EpubError,
     PipelineError,
+    ReadwiseError,
     StateError,
 )
 
@@ -69,7 +71,7 @@ def process(
     profile: str | None,
 ) -> None:
     """Turn the bookmarks of BOOK (ASIN or part of the title) into a Markdown file."""
-    if mode in ("ai", "auto") or readwise:
+    if mode in ("ai", "auto"):
         raise click.UsageError("not implemented yet: use the transcript or epub mode for now")
     options = Options(
         mode=mode,
